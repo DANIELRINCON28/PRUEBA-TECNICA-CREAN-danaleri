@@ -1,0 +1,55 @@
+# --- BASES DE DATOS Y DATOS ---
+# Ignora todas las bases de datos de la carpeta 02_Datos
+*.db
+*.sqlite
+*.sqlite3
+02_Datos/
+
+# --- PYTHON Y CACHÉ ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- ENTORNOS VIRTUALES ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- ARCHIVOS DE CONFIGURACIÓN Y SECRETOS ---
+.env
+.env.local
+.env.*.local
+*.log
+
+# --- JUPYTER NOTEBOOKS ---
+.ipynb_checkpoints
+
+# --- EDITORES E IDEs ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- DISTRIBUCIÓN / EMPAQUETADO ---
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
