@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
 
 from extraction import DataExtractor
 from cleaning import DataCleaner
+from feature_engineering import FeatureEngineer
 
 
 logging.basicConfig(
@@ -24,13 +26,23 @@ logging.basicConfig(
 class PipelineExecutor:
 	"""Ejecuta el pipeline de datos en pasos secuenciales y trazables."""
 
+	LINE_WIDTH = 104
+	STEP_TITLES = {
+		"extract_data": "Extraccion de fuentes",
+		"clean_data": "Limpieza de datos",
+		"feature_engineering": "Creacion de features",
+		"print_summary": "Resumen de resultados",
+	}
+
 	def __init__(self, data_dir: Path):
 		self.data_dir = Path(data_dir)
 		self.raw_dataframes: Dict[str, pd.DataFrame] | None = None
 		self.cleaned_dataframes: Dict[str, pd.DataFrame] | None = None
+		self.master_feature_store: pd.DataFrame | None = None
 		self._steps: Dict[str, Callable[..., Any]] = {
 			"extract_data": self.step_extract_data,
 			"clean_data": self.step_clean_data,
+			"feature_engineering": self.step_feature_engineering,
 			"print_summary": self.step_print_summary,
 		}
 
@@ -56,11 +68,40 @@ class PipelineExecutor:
 		logging.info("[STEP] clean_data -> completado")
 		return self.cleaned_dataframes
 
+	def step_feature_engineering(self, save_output: bool = True) -> pd.DataFrame:
+		"""Step: crea el Master Feature Store a partir de fuentes limpias."""
+		if self.cleaned_dataframes is None:
+			raise RuntimeError("No se puede crear features sin limpieza previa. Ejecuta clean_data primero.")
+
+		logging.info("[STEP] feature_engineering -> iniciado")
+		engineer = FeatureEngineer(cleaned_dataframes=self.cleaned_dataframes)
+		self.master_feature_store = engineer.build_master_feature_store()
+
+		if save_output:
+			feature_store_dir = self.data_dir / "feature_store"
+			feature_store_path = feature_store_dir / "df_master.parquet"
+			feature_store_dir.mkdir(parents=True, exist_ok=True)
+			self.master_feature_store.to_parquet(feature_store_path, index=False)
+			logging.info(
+				"[STEP] feature_engineering -> parquet guardado en %s",
+				feature_store_path,
+			)
+
+		logging.info(
+			"[STEP] feature_engineering -> completado. Master: %s filas | %s columnas",
+			f"{len(self.master_feature_store):,}",
+			f"{self.master_feature_store.shape[1]:,}",
+		)
+		return self.master_feature_store
+
 	def step_print_summary(self) -> None:
 		"""Step: imprime resumen de salida para validacion rapida."""
 		if self.cleaned_dataframes is None:
 			raise RuntimeError("No hay datos limpios para resumir. Ejecuta clean_data primero.")
 		self._print_summary(self.cleaned_dataframes)
+
+		if self.master_feature_store is not None:
+			self._print_master_summary(self.master_feature_store)
 
 	def run_steps(self, steps: Iterable[dict[str, Any]]) -> Dict[str, Any]:
 		"""
@@ -70,39 +111,67 @@ class PipelineExecutor:
 		{"name": "extract_data", "kwargs": {}}
 		"""
 		results: Dict[str, Any] = {}
+		steps_list = list(steps)
 
-		for idx, step in enumerate(steps, start=1):
+		self._print_section_header("PLAN DE EJECUCION")
+		for idx, step in enumerate(steps_list, start=1):
+			name = step["name"]
+			title = self.STEP_TITLES.get(name, name)
+			print(f"{idx:>2}. {name:<20} | {title}")
+		print("-" * self.LINE_WIDTH)
+
+		pipeline_start = perf_counter()
+
+		for idx, step in enumerate(steps_list, start=1):
 			name = step["name"]
 			kwargs = step.get("kwargs", {})
 
 			if name not in self._steps:
 				raise KeyError(f"Step no soportado: {name}. Steps validos: {sorted(self._steps.keys())}")
 
-			logging.info("[RUN] Step %s -> %s", idx, name)
+			title = self.STEP_TITLES.get(name, name)
+			self._print_step_start(idx=idx, total=len(steps_list), name=name, title=title)
+			step_start = perf_counter()
 			result = self._steps[name](**kwargs)
+			step_elapsed = perf_counter() - step_start
+			self._print_step_end(name=name, elapsed_seconds=step_elapsed, result=result)
 			results[name] = result
+
+		total_elapsed = perf_counter() - pipeline_start
+		self._print_section_header("EJECUCION COMPLETADA")
+		print(f"Duracion total: {total_elapsed:,.2f} s")
+		print("-" * self.LINE_WIDTH)
 
 		return results
 
-	def run(self) -> Dict[str, pd.DataFrame]:
+	def run(self) -> pd.DataFrame:
 		"""Ejecuta el flujo default del pipeline usando steps configurables por kwargs."""
-		logging.info("=== INICIO ORQUESTACION PIPELINE ===")
+		self._print_section_header("INICIO ORQUESTADOR PIPELINE")
+		print(f"Directorio de datos: {self.data_dir}")
+		print("-" * self.LINE_WIDTH)
+
+		logging.info("Inicio de orquestacion de pipeline")
 		default_steps = [
 			{"name": "extract_data", "kwargs": {}},
 			{"name": "clean_data", "kwargs": {}},
+			{"name": "feature_engineering", "kwargs": {"save_output": True}},
 			{"name": "print_summary", "kwargs": {}},
 		]
 		self.run_steps(default_steps)
-		logging.info("=== FIN ORQUESTACION PIPELINE ===")
+		logging.info("Fin de orquestacion de pipeline")
 
-		if self.cleaned_dataframes is None:
-			raise RuntimeError("El pipeline finalizo sin generar datos limpios.")
-		return self.cleaned_dataframes
+		if self.master_feature_store is None:
+			raise RuntimeError("El pipeline finalizo sin generar el Master Feature Store.")
+		return self.master_feature_store
 
 	@staticmethod
 	def _print_summary(cleaned_dataframes: Dict[str, pd.DataFrame]) -> None:
 		"""Imprime resumen de salida del pipeline para validacion rapida."""
-		print("\n=== RESUMEN FINAL DEL PIPELINE ===")
+		print("\n" + "=" * PipelineExecutor.LINE_WIDTH)
+		print("RESUMEN FINAL DE FUENTES LIMPIAS")
+		print("=" * PipelineExecutor.LINE_WIDTH)
+		print(f"{'Fuente':<24} {'Filas':>14} {'Columnas':>10} {'Nulos':>14}")
+		print("-" * PipelineExecutor.LINE_WIDTH)
 		total_rows = 0
 		total_nulls = 0
 
@@ -112,12 +181,65 @@ class PipelineExecutor:
 			total_rows += rows
 			total_nulls += nulls
 			print(
-				f"- {source_name:<22} filas={rows:>10,} | columnas={dataframe.shape[1]:>2} | nulos={nulls:,}"
+				f"{source_name:<24} {rows:>14,} {dataframe.shape[1]:>10,} {nulls:>14,}"
 			)
 
-		print("-" * 88)
-		print(f"TOTAL FILAS (sumatoria fuentes): {total_rows:,}")
-		print(f"TOTAL NULOS (sumatoria fuentes): {total_nulls:,}")
+		print("-" * PipelineExecutor.LINE_WIDTH)
+		print(f"{'TOTAL':<24} {total_rows:>14,} {'-':>10} {total_nulls:>14,}")
+
+	@staticmethod
+	def _print_master_summary(df_master: pd.DataFrame) -> None:
+		"""Imprime resumen del Master Feature Store consolidado."""
+		nulls = int(df_master.isna().sum().sum())
+		print("\n" + "=" * PipelineExecutor.LINE_WIDTH)
+		print("MASTER FEATURE STORE")
+		print("=" * PipelineExecutor.LINE_WIDTH)
+		print(f"{'Filas':<30}: {len(df_master):,}")
+		print(f"{'Columnas':<30}: {df_master.shape[1]:,}")
+		print(f"{'Nulos totales':<30}: {nulls:,}")
+		print("-" * PipelineExecutor.LINE_WIDTH)
+
+	@staticmethod
+	def _print_section_header(title: str) -> None:
+		"""Imprime un encabezado de seccion estandar para mejorar legibilidad."""
+		print("\n" + "=" * PipelineExecutor.LINE_WIDTH)
+		print(title)
+		print("=" * PipelineExecutor.LINE_WIDTH)
+
+	@staticmethod
+	def _print_step_start(idx: int, total: int, name: str, title: str) -> None:
+		"""Imprime inicio de step con indice, nombre tecnico y descripcion."""
+		print("\n" + "-" * PipelineExecutor.LINE_WIDTH)
+		print(f"STEP {idx}/{total} | {name}")
+		print(f"Descripcion: {title}")
+		print("-" * PipelineExecutor.LINE_WIDTH)
+
+	@staticmethod
+	def _print_step_end(name: str, elapsed_seconds: float, result: Any) -> None:
+		"""Imprime cierre de step con duracion y metrica principal del resultado."""
+		metric = PipelineExecutor._format_step_result_metric(name=name, result=result)
+		print(f"Estado: OK | Duracion: {elapsed_seconds:,.2f} s")
+		if metric:
+			print(f"Salida : {metric}")
+
+	@staticmethod
+	def _format_step_result_metric(name: str, result: Any) -> str:
+		"""Resume el resultado de un step para mostrarlo en consola."""
+		if isinstance(result, pd.DataFrame):
+			return f"DataFrame {len(result):,} filas x {result.shape[1]:,} columnas"
+
+		if isinstance(result, dict):
+			if all(isinstance(value, pd.DataFrame) for value in result.values()):
+				total_rows = sum(len(value) for value in result.values())
+				return (
+					f"{len(result):,} fuentes ({total_rows:,} filas agregadas en memoria)"
+				)
+			return f"Diccionario con {len(result):,} elementos"
+
+		if result is None:
+			return "Sin objeto de retorno"
+
+		return f"Tipo de salida: {type(result).__name__}"
 
 
 if __name__ == "__main__":

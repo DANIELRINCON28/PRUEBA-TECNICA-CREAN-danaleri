@@ -1,3 +1,6 @@
+# --- archivos .parquet ---
+*.parquet
+
 # --- BASES DE DATOS Y DATOS ---
 # Ignora todas las bases de datos de la carpeta 02_Datos
 *.db
