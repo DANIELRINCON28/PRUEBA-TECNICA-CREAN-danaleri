@@ -61,8 +61,9 @@ def inject_css() -> None:
     st.markdown(
         f"""
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap');
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+            /* 1. Forzar variables de modo claro en la raíz */
             :root {{
                 --bg-light: {PALETTE['bg_light']};
                 --bg-white: {PALETTE['bg_white']};
@@ -77,41 +78,55 @@ def inject_css() -> None:
                 --border: {PALETTE['border']};
             }}
 
-            html, body, [class*="css"] {{
-                font-family: 'Inter', 'Roboto', sans-serif;
-                color: var(--text);
+            /* Forzar fondo general claro */
+            html, body, [data-testid="stAppViewContainer"] {{
+                background-color: var(--bg-light) !important;
+                color: var(--text) !important;
+                font-family: 'Inter', sans-serif;
             }}
 
-            .stApp {{
-                background:
-                    radial-gradient(circle at 5% 5%, rgba(65, 196, 232, 0.15), transparent 35%),
-                    radial-gradient(circle at 90% 10%, rgba(247, 168, 184, 0.18), transparent 30%),
-                    linear-gradient(160deg, var(--bg-light) 0%, var(--bg-white) 100%);
-            }}
-
+            /* 2. Forzar estilizado de la barra lateral (Sidebar) */
             section[data-testid="stSidebar"] {{
-                background: linear-gradient(180deg, #F4F7FB 0%, #FFFFFF 100%);
-                border-right: 1px solid var(--border);
+                background-color: #FFFFFF !important;
+                border-right: 1px solid var(--border) !important;
             }}
 
+            section[data-testid="stSidebar"] * {{
+                color: var(--text) !important;
+            }}
+
+            /* Estilizado de radio buttons y labels en el sidebar */
+            div[data-testid="stMarkdownContainer"] > p,
+            label[data-testid="stWidgetLabel"] > div > p {{
+                color: var(--text) !important;
+                font-weight: 600 !important;
+            }}
+
+            /* 3. Estilizado de etiquetas Multiselect */
+            span[data-baseweb="tag"] {{
+                background-color: rgba(65, 196, 232, 0.2) !important;
+                border: 1px solid var(--primary) !important;
+            }}
+            span[data-baseweb="tag"] span {{
+                color: var(--text) !important;
+            }}
+
+            /* 4. Tarjetas KPI */
             .kpi-card {{
                 background: var(--bg-white);
                 border-radius: 12px;
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
                 border: 1px solid var(--border);
-                padding: 0.9rem 1rem 0.95rem 1rem;
+                padding: 1rem;
                 position: relative;
                 overflow: hidden;
-                min-height: 118px;
+                min-height: 110px;
             }}
 
             .kpi-card::before {{
                 content: '';
                 position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 6px;
+                top: 0; left: 0; width: 100%; height: 5px;
                 background: var(--primary);
             }}
 
@@ -121,38 +136,38 @@ def inject_css() -> None:
             .kpi-card.priority::before {{ background: var(--priority); }}
 
             .kpi-label {{
-                color: var(--muted);
-                font-size: 0.87rem;
-                margin-top: 0.35rem;
+                color: var(--muted) !important;
+                font-size: 0.85rem;
+                font-weight: 500;
             }}
 
             .kpi-value {{
-                font-size: 1.45rem;
+                font-size: 1.4rem;
                 font-weight: 700;
-                color: var(--text);
-                letter-spacing: -0.02em;
-                margin-top: 0.25rem;
+                color: var(--text) !important;
+                margin-top: 0.2rem;
             }}
 
+            /* Header del Módulo */
             .module-header {{
-                background: linear-gradient(135deg, rgba(65, 196, 232, 0.13), rgba(142, 91, 206, 0.10));
-                border: 1px solid rgba(65, 196, 232, 0.35);
+                background: linear-gradient(135deg, rgba(65, 196, 232, 0.12), rgba(142, 91, 206, 0.08));
+                border: 1px solid rgba(65, 196, 232, 0.3);
                 border-radius: 12px;
-                padding: 1rem 1rem;
-                margin-bottom: 0.75rem;
+                padding: 1rem 1.2rem;
+                margin-bottom: 1rem;
             }}
 
             .module-title {{
-                font-size: 1.15rem;
+                font-size: 1.2rem;
                 font-weight: 700;
-                color: var(--text);
+                color: var(--text) !important;
                 margin: 0;
             }}
 
             .module-subtitle {{
-                font-size: 0.92rem;
-                color: var(--muted);
-                margin: 0.25rem 0 0 0;
+                font-size: 0.9rem;
+                color: var(--muted) !important;
+                margin-top: 0.2rem;
             }}
 
             .stButton > button,
@@ -256,7 +271,6 @@ def load_feature_store_shape() -> Tuple[int, int]:
         metadata = pq.ParquetFile(FEATURE_STORE_PATH).metadata
         return (metadata.num_rows, metadata.num_columns)
     except Exception:
-        # Fallback seguro si pyarrow metadata no esta disponible.
         head_df = pd.read_parquet(FEATURE_STORE_PATH).head(1)
         return (0, head_df.shape[1])
 
@@ -402,15 +416,17 @@ def build_pareto_chart(df: pd.DataFrame) -> go.Figure:
     )
 
     fig.update_layout(
-        title="Curva de Concentracion Pareto | Valor Esperado por Decil",
+        template="plotly_white",
+        title={"text": "Curva de Concentración Pareto | Valor Esperado por Decil", "font": {"color": PALETTE["text"]}},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": PALETTE["text"]},
         margin={"l": 10, "r": 10, "t": 45, "b": 10},
-        legend={"orientation": "h", "y": 1.12, "x": 0},
+        legend={"orientation": "h", "y": 1.12, "x": 0, "font": {"color": PALETTE["text"]}},
     )
-    fig.update_xaxes(title_text="Decil de prioridad")
-    fig.update_yaxes(title_text="EV total", secondary_y=False)
-    fig.update_yaxes(title_text="Acumulado", tickformat=".0%", secondary_y=True)
+    fig.update_xaxes(title_text="Decil de prioridad", title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig.update_yaxes(title_text="EV total", secondary_y=False, title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig.update_yaxes(title_text="Acumulado", tickformat=".0%", secondary_y=True, title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
 
     return fig
 
@@ -443,14 +459,19 @@ def build_segment_charts(df: pd.DataFrame) -> Tuple[go.Figure, go.Figure]:
         barmode="group",
         title="Penetracion esperada por segmento comercial",
         color_discrete_sequence=[PALETTE["primary"], PALETTE["warm"]],
+        template="plotly_white",
     )
     fig_segment.update_layout(
         xaxis_title="Segmento",
         yaxis_title="Valor",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": PALETTE["text"]},
         margin={"l": 10, "r": 10, "t": 45, "b": 10},
+        legend={"font": {"color": PALETTE["text"]}},
     )
+    fig_segment.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig_segment.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
 
     fig_age = px.bar(
         age_df,
@@ -459,14 +480,19 @@ def build_segment_charts(df: pd.DataFrame) -> Tuple[go.Figure, go.Figure]:
         barmode="group",
         title="Penetracion esperada por grupo de edad",
         color_discrete_sequence=[PALETTE["accent"], PALETTE["priority"]],
+        template="plotly_white",
     )
     fig_age.update_layout(
         xaxis_title="Grupo de edad",
         yaxis_title="Valor",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": PALETTE["text"]},
         margin={"l": 10, "r": 10, "t": 45, "b": 10},
+        legend={"font": {"color": PALETTE["text"]}},
     )
+    fig_age.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig_age.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
 
     return fig_segment, fig_age
 
@@ -623,12 +649,16 @@ def render_module_technical(df: pd.DataFrame) -> None:
                 orientation="h",
                 title="Top variables | Modelo de adopcion",
                 color_discrete_sequence=[PALETTE["primary"]],
+                template="plotly_white",
             )
             fig_adop.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
+                font={"color": PALETTE["text"]},
                 margin={"l": 10, "r": 10, "t": 45, "b": 10},
             )
+            fig_adop.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+            fig_adop.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             st.plotly_chart(fig_adop, use_container_width=True)
 
         if "monto" in importance_map:
@@ -639,12 +669,16 @@ def render_module_technical(df: pd.DataFrame) -> None:
                 orientation="h",
                 title="Top variables | Modelo de monto",
                 color_discrete_sequence=[PALETTE["priority"]],
+                template="plotly_white",
             )
             fig_monto.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
+                font={"color": PALETTE["text"]},
                 margin={"l": 10, "r": 10, "t": 45, "b": 10},
             )
+            fig_monto.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+            fig_monto.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             st.plotly_chart(fig_monto, use_container_width=True)
 
     rows_feature_store, cols_feature_store = load_feature_store_shape()
