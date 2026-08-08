@@ -6,7 +6,9 @@ Orquestador del pipeline por steps para ejecutar el flujo completo desde un solo
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
+import webbrowser
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable
@@ -41,6 +43,7 @@ class PipelineExecutor:
 		"clean_data": "Limpieza de datos",
 		"feature_engineering": "Creacion de features",
 		"train_models": "Entrenamiento de modelos",
+		"launch_dashboard": "Despliegue de dashboard Streamlit",
 		"print_summary": "Resumen de resultados",
 	}
 
@@ -55,6 +58,7 @@ class PipelineExecutor:
 			"clean_data": self.step_clean_data,
 			"feature_engineering": self.step_feature_engineering,
 			"train_models": self.step_train_models,
+			"launch_dashboard": self.step_launch_dashboard,
 			"print_summary": self.step_print_summary,
 		}
 
@@ -128,7 +132,45 @@ class PipelineExecutor:
 		logging.info("[STEP] train_models -> iniciado")
 		self.training_artifacts = train_pipeline(self.master_feature_store)
 		logging.info("[STEP] train_models -> completado")
+		logging.info(
+			"Artefactos listos para consumo: models/*.pkl y data/scores/df_predictions.parquet"
+		)
 		return self.training_artifacts
+
+	def step_launch_dashboard(self, detach: bool = True) -> str:
+		"""Step: lanza la interfaz Streamlit para consumo del negocio."""
+		dashboard_path = SRC_DIR / "dashboard" / "app.py"
+		scores_path = self.data_dir / "scores" / "df_predictions.parquet"
+		dashboard_url = "http://localhost:8501"
+
+		if not dashboard_path.exists():
+			raise FileNotFoundError(
+				f"No se encontro el dashboard en {dashboard_path}."
+			)
+
+		if not scores_path.exists():
+			raise FileNotFoundError(
+				"No se encontro data/scores/df_predictions.parquet. "
+				"Ejecuta train_models antes de lanzar el dashboard."
+			)
+
+		command = [sys.executable, "-m", "streamlit", "run", str(dashboard_path)]
+		logging.info("[STEP] launch_dashboard -> iniciado")
+		logging.info("Comando dashboard: %s", " ".join(command))
+
+		if detach:
+			process = subprocess.Popen(command, cwd=str(BASE_DIR))
+			logging.info("[STEP] launch_dashboard -> proceso iniciado en background")
+			logging.info("Dashboard disponible en: %s", dashboard_url)
+			try:
+				webbrowser.open(dashboard_url)
+			except Exception as exc:
+				logging.warning("No fue posible abrir el navegador automaticamente: %s", exc)
+			return f"Dashboard lanzado en background (PID={process.pid})"
+
+		subprocess.run(command, cwd=str(BASE_DIR), check=True)
+		logging.info("[STEP] launch_dashboard -> proceso finalizado")
+		return "Dashboard ejecutado en foreground"
 
 	def run_steps(self, steps: Iterable[dict[str, Any]]) -> Dict[str, Any]:
 		"""
@@ -171,7 +213,7 @@ class PipelineExecutor:
 
 		return results
 
-	def run(self) -> pd.DataFrame:
+	def run(self, launch_dashboard: bool = False) -> pd.DataFrame:
 		"""Ejecuta el flujo default del pipeline usando steps configurables por kwargs."""
 		self._print_section_header("INICIO ORQUESTADOR PIPELINE")
 		print(f"Directorio de datos: {self.data_dir}")
@@ -185,6 +227,9 @@ class PipelineExecutor:
 			{"name": "train_models", "kwargs": {}},
 			{"name": "print_summary", "kwargs": {}},
 		]
+		if launch_dashboard:
+			default_steps.append({"name": "launch_dashboard", "kwargs": {"detach": True}})
+			logging.info("Dashboard habilitado: se lanzara Streamlit al finalizar el pipeline")
 		self.run_steps(default_steps)
 		logging.info("Fin de orquestacion de pipeline")
 
@@ -331,4 +376,4 @@ if __name__ == "__main__":
 	RAW_DATA_PATH = BASE_DIR / "data"
 
 	executor = PipelineExecutor(data_dir=RAW_DATA_PATH)
-	executor.run()
+	executor.run(launch_dashboard=True)
