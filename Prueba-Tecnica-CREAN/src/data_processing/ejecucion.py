@@ -6,6 +6,7 @@ Orquestador del pipeline por steps para ejecutar el flujo completo desde un solo
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable
@@ -15,6 +16,14 @@ import pandas as pd
 from extraction import DataExtractor
 from cleaning import DataCleaner
 from feature_engineering import FeatureEngineer
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+SRC_DIR = BASE_DIR / "src"
+if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
+	sys.path.insert(0, str(SRC_DIR))
+
+from models.train import TrainingArtifacts, train_pipeline
 
 
 logging.basicConfig(
@@ -31,6 +40,7 @@ class PipelineExecutor:
 		"extract_data": "Extraccion de fuentes",
 		"clean_data": "Limpieza de datos",
 		"feature_engineering": "Creacion de features",
+		"train_models": "Entrenamiento de modelos",
 		"print_summary": "Resumen de resultados",
 	}
 
@@ -39,10 +49,12 @@ class PipelineExecutor:
 		self.raw_dataframes: Dict[str, pd.DataFrame] | None = None
 		self.cleaned_dataframes: Dict[str, pd.DataFrame] | None = None
 		self.master_feature_store: pd.DataFrame | None = None
+		self.training_artifacts: TrainingArtifacts | None = None
 		self._steps: Dict[str, Callable[..., Any]] = {
 			"extract_data": self.step_extract_data,
 			"clean_data": self.step_clean_data,
 			"feature_engineering": self.step_feature_engineering,
+			"train_models": self.step_train_models,
 			"print_summary": self.step_print_summary,
 		}
 
@@ -103,6 +115,21 @@ class PipelineExecutor:
 		if self.master_feature_store is not None:
 			self._print_master_summary(self.master_feature_store)
 
+		if self.training_artifacts is not None:
+			self._print_training_summary(self.training_artifacts)
+
+	def step_train_models(self) -> TrainingArtifacts:
+		"""Step: entrena modelos de adopcion, monto y scoring de negocio."""
+		if self.master_feature_store is None:
+			raise RuntimeError(
+				"No se puede entrenar sin feature store. Ejecuta feature_engineering primero."
+			)
+
+		logging.info("[STEP] train_models -> iniciado")
+		self.training_artifacts = train_pipeline(self.master_feature_store)
+		logging.info("[STEP] train_models -> completado")
+		return self.training_artifacts
+
 	def run_steps(self, steps: Iterable[dict[str, Any]]) -> Dict[str, Any]:
 		"""
 		Ejecuta una lista de steps dinamicos.
@@ -155,6 +182,7 @@ class PipelineExecutor:
 			{"name": "extract_data", "kwargs": {}},
 			{"name": "clean_data", "kwargs": {}},
 			{"name": "feature_engineering", "kwargs": {"save_output": True}},
+			{"name": "train_models", "kwargs": {}},
 			{"name": "print_summary", "kwargs": {}},
 		]
 		self.run_steps(default_steps)
@@ -228,6 +256,17 @@ class PipelineExecutor:
 		if isinstance(result, pd.DataFrame):
 			return f"DataFrame {len(result):,} filas x {result.shape[1]:,} columnas"
 
+		if isinstance(result, TrainingArtifacts):
+			classifier = result.classifier_eval.test_metrics
+			regressor = result.regressor_eval.test_metrics
+			return (
+				"Clasificacion ROC-AUC="
+				f"{classifier['roc_auc']:.4f} | "
+				"Regresion R2="
+				f"{regressor['r2']:.4f} | "
+				f"Predicciones={len(result.predictions):,}"
+			)
+
 		if isinstance(result, dict):
 			if all(isinstance(value, pd.DataFrame) for value in result.values()):
 				total_rows = sum(len(value) for value in result.values())
@@ -240,6 +279,51 @@ class PipelineExecutor:
 			return "Sin objeto de retorno"
 
 		return f"Tipo de salida: {type(result).__name__}"
+
+	@staticmethod
+	def _print_training_summary(artifacts: TrainingArtifacts) -> None:
+		"""Imprime un resumen ejecutivo del entrenamiento y del scoring generado."""
+		classifier_train = artifacts.classifier_eval.train_metrics
+		classifier_test = artifacts.classifier_eval.test_metrics
+		regressor_train = artifacts.regressor_eval.train_metrics
+		regressor_test = artifacts.regressor_eval.test_metrics
+		decile_distribution = (
+			artifacts.predictions.groupby("decel_prioridad", as_index=False)
+			.agg(
+				clientes=("numero_id", "count"),
+				valor_esperado_total=("valor_esperado_12m", "sum"),
+			)
+			.sort_values("decel_prioridad", ascending=False)
+		)
+
+		print("\n" + "=" * PipelineExecutor.LINE_WIDTH)
+		print("RESUMEN DE ENTRENAMIENTO Y SCORING")
+		print("=" * PipelineExecutor.LINE_WIDTH)
+		print(
+			"Clasificacion train/test | "
+			f"ROC-AUC {classifier_train['roc_auc']:.4f}/{classifier_test['roc_auc']:.4f} | "
+			f"PR-AUC {classifier_train['pr_auc']:.4f}/{classifier_test['pr_auc']:.4f} | "
+			f"F1 {classifier_train['f1']:.4f}/{classifier_test['f1']:.4f}"
+		)
+		print(
+			"Regresion train/test     | "
+			f"MAE {regressor_train['mae']:.2f}/{regressor_test['mae']:.2f} | "
+			f"RMSE {regressor_train['rmse']:.2f}/{regressor_test['rmse']:.2f} | "
+			f"R2 {regressor_train['r2']:.4f}/{regressor_test['r2']:.4f}"
+		)
+		print(f"{'Predicciones generadas':<30}: {len(artifacts.predictions):,}")
+		print(f"{'Artefactos modelos':<30}: models/lgbm_adopcion.pkl | models/lgbm_monto.pkl")
+		print(f"{'Archivo scoring':<30}: data/scores/df_predictions.parquet")
+		print("-" * PipelineExecutor.LINE_WIDTH)
+		print(f"{'Decil':<8} {'Clientes':>14} {'EV total':>22}")
+		print("-" * PipelineExecutor.LINE_WIDTH)
+		for _, row in decile_distribution.iterrows():
+			print(
+				f"{int(row['decel_prioridad']):<8} "
+				f"{int(row['clientes']):>14,} "
+				f"{float(row['valor_esperado_total']):>22,.2f}"
+			)
+		print("-" * PipelineExecutor.LINE_WIDTH)
 
 
 if __name__ == "__main__":
