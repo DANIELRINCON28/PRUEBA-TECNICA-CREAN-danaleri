@@ -8,6 +8,7 @@ Modulo 3: Diagnostico tecnico y MLOps.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -22,10 +23,21 @@ from plotly.subplots import make_subplots
 # Configuracion base
 # -------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 SCORES_PATH = PROJECT_ROOT / "data" / "scores" / "df_predictions.parquet"
 FEATURE_STORE_PATH = PROJECT_ROOT / "data" / "feature_store" / "df_master.parquet"
 CLASSIFIER_PATH = PROJECT_ROOT / "models" / "lgbm_adopcion.pkl"
 REGRESSOR_PATH = PROJECT_ROOT / "models" / "lgbm_monto.pkl"
+
+try:
+    from models.train import ADOPTION_FEATURE_COLUMNS, AMOUNT_FEATURE_COLUMNS, CAT_FEATURES
+except Exception:  # pragma: no cover - graceful fallback
+    ADOPTION_FEATURE_COLUMNS = []
+    AMOUNT_FEATURE_COLUMNS = []
+    CAT_FEATURES = []
 
 PALETTE = {
     "bg_light": "#F9FAFC",
@@ -204,6 +216,42 @@ def inject_css() -> None:
                 background: rgba(65, 196, 232, 0.18) !important;
                 border-color: rgba(65, 196, 232, 0.45) !important;
             }}
+
+            .feature-card {{
+                background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(244,247,251,0.95));
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                padding: 0.9rem 1rem;
+                box-shadow: 0 3px 10px rgba(0,0,0,0.04);
+                margin-bottom: 0.7rem;
+            }}
+
+            .feature-card h4 {{
+                margin: 0 0 0.35rem 0;
+                color: var(--text);
+                font-size: 0.95rem;
+            }}
+
+            .feature-chip {{
+                display: inline-block;
+                background: rgba(65, 196, 232, 0.14);
+                color: var(--text);
+                border-radius: 999px;
+                padding: 0.22rem 0.6rem;
+                margin: 0.22rem 0.25rem 0.22rem 0;
+                font-size: 0.78rem;
+                border: 1px solid rgba(65, 196, 232, 0.25);
+            }}
+
+            .feature-chip.category {{
+                background: rgba(255, 208, 0, 0.2);
+                border-color: rgba(255, 208, 0, 0.35);
+            }}
+
+            .feature-chip.numeric {{
+                background: rgba(0, 200, 130, 0.14);
+                border-color: rgba(0, 200, 130, 0.25);
+            }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -312,13 +360,14 @@ def _extract_feature_importance(pipeline, top_n: int = 15) -> pd.DataFrame:
 
 
 def build_sidebar(df: pd.DataFrame) -> Tuple[str, List[str], List[str], List[int]]:
-    st.sidebar.markdown("## CREAN | Navegacion")
+    st.sidebar.markdown("## CREAN | Bancolombia")
     module = st.sidebar.radio(
         "Modulo",
         options=[
             "Vision Ejecutiva",
             "Explorador Tactico",
             "Diagnostico Tecnico",
+            "Features por Modelo",
         ],
         index=0,
     )
@@ -383,6 +432,24 @@ def kpi_card(label: str, value: str, tone: str = "") -> None:
     )
 
 
+def render_chart_block(title: str, description: str, chart_object: object) -> None:
+    st.markdown(f"### {title}")
+    st.caption(description)
+    st.plotly_chart(chart_object, use_container_width=True)
+
+
+def render_feature_group(title: str, feature_names: List[str], category: str) -> None:
+    st.markdown(
+        f"""
+        <div class="feature-card">
+            <h4>{title}</h4>
+            {''.join(f'<span class="feature-chip {category}">{name}</span>' for name in feature_names)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def build_pareto_chart(df: pd.DataFrame) -> go.Figure:
     pareto_df = (
         df.groupby("decel_prioridad", as_index=False)
@@ -421,7 +488,7 @@ def build_pareto_chart(df: pd.DataFrame) -> go.Figure:
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font={"color": PALETTE["text"]},
-        margin={"l": 10, "r": 10, "t": 45, "b": 10},
+        margin={"l": 10, "r": 10, "t": 80, "b": 10},
         legend={"orientation": "h", "y": 1.12, "x": 0, "font": {"color": PALETTE["text"]}},
     )
     fig.update_xaxes(title_text="Decil de prioridad", title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
@@ -519,7 +586,11 @@ def render_module_executive(df: pd.DataFrame) -> None:
         kpi_card("EV promedio por cliente", _currency(avg_ev), tone="warm")
 
     pareto_fig = build_pareto_chart(df)
-    st.plotly_chart(pareto_fig, use_container_width=True)
+    render_chart_block(
+        "Curva de concentración Pareto",
+        "Muestra cómo el valor esperado se concentra en los deciles más altos y justifica la priorización comercial.",
+        pareto_fig,
+    )
 
     decile_impact = (
         df[df["decel_prioridad"].isin([9, 10])]["valor_esperado_12m"].sum() / total_ev
@@ -601,9 +672,17 @@ def render_module_tactical(df: pd.DataFrame) -> None:
     segment_fig, age_fig = build_segment_charts(df)
     s1, s2 = st.columns(2)
     with s1:
-        st.plotly_chart(segment_fig, use_container_width=True)
+        render_chart_block(
+            "Penetración esperada por segmento",
+            "Compara la probabilidad de adopción y el EV promedio por segmento comercial.",
+            segment_fig,
+        )
     with s2:
-        st.plotly_chart(age_fig, use_container_width=True)
+        render_chart_block(
+            "Penetración esperada por grupo de edad",
+            "Muestra cómo cambia la expectativa de valor por cohortes de edad.",
+            age_fig,
+        )
 
     st.markdown("### Exportador de cohortes")
     export_df = df[table_columns].sort_values("valor_esperado_12m", ascending=False)
@@ -659,7 +738,11 @@ def render_module_technical(df: pd.DataFrame) -> None:
             )
             fig_adop.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             fig_adop.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
-            st.plotly_chart(fig_adop, use_container_width=True)
+            render_chart_block(
+                "Importancia de features | Modelo de adopción",
+                "Destaca las variables que más impulsan la probabilidad de adopción del cliente.",
+                fig_adop,
+            )
 
         if "monto" in importance_map:
             fig_monto = px.bar(
@@ -679,7 +762,11 @@ def render_module_technical(df: pd.DataFrame) -> None:
             )
             fig_monto.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             fig_monto.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
-            st.plotly_chart(fig_monto, use_container_width=True)
+            render_chart_block(
+                "Importancia de features | Modelo de monto",
+                "Muestra qué variables explican mejor el monto esperado de inversión.",
+                fig_monto,
+            )
 
     rows_feature_store, cols_feature_store = load_feature_store_shape()
     core_nulls = int(
@@ -730,6 +817,45 @@ def render_module_technical(df: pd.DataFrame) -> None:
         )
 
 
+def render_module_features() -> None:
+    render_header(
+        "Modulo 4 | Features por Modelo",
+        "Vista separada para entender qué variables alimentan la adopción y el monto estimado.",
+    )
+
+    st.markdown("### Variables del modelo de adopción")
+    st.caption("Conjunto de features empleadas para estimar la probabilidad de que un cliente adopte el producto.")
+
+    adoption_features = [name for name in ADOPTION_FEATURE_COLUMNS if name]
+    if adoption_features:
+        adoption_categorical = [name for name in adoption_features if name in CAT_FEATURES]
+        adoption_numeric = [name for name in adoption_features if name not in CAT_FEATURES]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            render_feature_group("Categoricas", adoption_categorical, "category")
+        with c2:
+            render_feature_group("Numéricas", adoption_numeric, "numeric")
+    else:
+        st.info("No se encontraron listas de features de entrenamiento para el modelo de adopción.")
+
+    st.markdown("### Variables del modelo de monto")
+    st.caption("Conjunto de features empleadas para estimar el monto potencial de inversión a 12 meses.")
+
+    amount_features = [name for name in AMOUNT_FEATURE_COLUMNS if name]
+    if amount_features:
+        amount_categorical = [name for name in amount_features if name in CAT_FEATURES]
+        amount_numeric = [name for name in amount_features if name not in CAT_FEATURES]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            render_feature_group("Categoricas", amount_categorical, "category")
+        with c2:
+            render_feature_group("Numéricas", amount_numeric, "numeric")
+    else:
+        st.info("No se encontraron listas de features de entrenamiento para el modelo de monto.")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="CREAN | App de Inversiones",
@@ -739,7 +865,7 @@ def main() -> None:
     inject_css()
 
     st.title("App de Inversiones CREAN")
-    st.caption("Plataforma de priorizacion comercial y diagnostico MLOps")
+    st.caption("Plataforma de priorizacion comercial y diagnostico de modelos de adopcion y monto esperado.")
 
     try:
         df = load_dashboard_dataset()
@@ -758,8 +884,10 @@ def main() -> None:
         render_module_executive(filtered_df)
     elif module == "Explorador Tactico":
         render_module_tactical(filtered_df)
-    else:
+    elif module == "Diagnostico Tecnico":
         render_module_technical(filtered_df)
+    else:
+        render_module_features()
 
 
 if __name__ == "__main__":
