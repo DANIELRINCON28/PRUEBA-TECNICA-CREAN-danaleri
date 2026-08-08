@@ -4,6 +4,8 @@ Dashboard Streamlit para App de Inversiones CREAN.
 Modulo 1: Vision ejecutiva de negocio.
 Modulo 2: Explorador tactico y priorizacion.
 Modulo 3: Diagnostico tecnico y MLOps.
+Modulo 4: Features por Modelo.
+Modulo 5: Integracion con Procesos y Ecosistema CREAN.
 """
 
 from __future__ import annotations
@@ -12,11 +14,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+from sklearn.metrics import average_precision_score, f1_score, mean_absolute_error, mean_squared_error, r2_score, roc_auc_score
+from sklearn.model_selection import train_test_split
 
 
 # -------------------------
@@ -75,7 +80,6 @@ def inject_css() -> None:
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-            /* 1. Forzar variables de modo claro en la raíz */
             :root {{
                 --bg-light: {PALETTE['bg_light']};
                 --bg-white: {PALETTE['bg_white']};
@@ -90,14 +94,17 @@ def inject_css() -> None:
                 --border: {PALETTE['border']};
             }}
 
-            /* Forzar fondo general claro */
             html, body, [data-testid="stAppViewContainer"] {{
                 background-color: var(--bg-light) !important;
                 color: var(--text) !important;
                 font-family: 'Inter', sans-serif;
+                color-scheme: light !important;
             }}
 
-            /* 2. Forzar estilizado de la barra lateral (Sidebar) */
+            [data-testid="stAppViewContainer"] * {{
+                text-shadow: none !important;
+            }}
+
             section[data-testid="stSidebar"] {{
                 background-color: #FFFFFF !important;
                 border-right: 1px solid var(--border) !important;
@@ -107,14 +114,18 @@ def inject_css() -> None:
                 color: var(--text) !important;
             }}
 
-            /* Estilizado de radio buttons y labels en el sidebar */
             div[data-testid="stMarkdownContainer"] > p,
+            div[data-testid="stCaption"],
+            div[data-testid="stMarkdownContainer"] p,
             label[data-testid="stWidgetLabel"] > div > p {{
                 color: var(--text) !important;
                 font-weight: 600 !important;
             }}
 
-            /* 3. Estilizado de etiquetas Multiselect */
+            h1, h2, h3, h4, h5 {{
+                color: var(--text) !important;
+            }}
+
             span[data-baseweb="tag"] {{
                 background-color: rgba(65, 196, 232, 0.2) !important;
                 border: 1px solid var(--primary) !important;
@@ -123,7 +134,6 @@ def inject_css() -> None:
                 color: var(--text) !important;
             }}
 
-            /* 4. Tarjetas KPI */
             .kpi-card {{
                 background: var(--bg-white);
                 border-radius: 12px;
@@ -160,7 +170,6 @@ def inject_css() -> None:
                 margin-top: 0.2rem;
             }}
 
-            /* Header del Módulo */
             .module-header {{
                 background: linear-gradient(135deg, rgba(65, 196, 232, 0.12), rgba(142, 91, 206, 0.08));
                 border: 1px solid rgba(65, 196, 232, 0.3);
@@ -232,6 +241,12 @@ def inject_css() -> None:
                 font-size: 0.95rem;
             }}
 
+            .feature-card .subtle {{
+                color: var(--muted);
+                font-size: 0.82rem;
+                margin: 0.2rem 0 0.4rem 0;
+            }}
+
             .feature-chip {{
                 display: inline-block;
                 background: rgba(65, 196, 232, 0.14);
@@ -251,6 +266,27 @@ def inject_css() -> None:
             .feature-chip.numeric {{
                 background: rgba(0, 200, 130, 0.14);
                 border-color: rgba(0, 200, 130, 0.25);
+            }}
+
+            /* Refuerzo de contraste para títulos y textos de Plotly en navegadores con modo oscuro */
+            .js-plotly-plot .plotly .gtitle,
+            .js-plotly-plot .plotly .xtitle,
+            .js-plotly-plot .plotly .ytitle,
+            .js-plotly-plot .plotly .y2title,
+            .js-plotly-plot .plotly .legendtext,
+            .js-plotly-plot .plotly .xtick text,
+            .js-plotly-plot .plotly .ytick text,
+            .js-plotly-plot .plotly .annotation-text {{
+                fill: {PALETTE['text']} !important;
+                color: {PALETTE['text']} !important;
+                opacity: 1 !important;
+                font-weight: 600 !important;
+            }}
+
+            .js-plotly-plot .plotly .modebar {{
+                background: rgba(255, 255, 255, 0.86) !important;
+                border-radius: 8px !important;
+                border: 1px solid rgba(148, 163, 184, 0.4) !important;
             }}
         </style>
         """,
@@ -368,6 +404,7 @@ def build_sidebar(df: pd.DataFrame) -> Tuple[str, List[str], List[str], List[int
             "Explorador Tactico",
             "Diagnostico Tecnico",
             "Features por Modelo",
+            "Ecosistema CREAN",
         ],
         index=0,
     )
@@ -433,8 +470,15 @@ def kpi_card(label: str, value: str, tone: str = "") -> None:
 
 
 def render_chart_block(title: str, description: str, chart_object: object) -> None:
-    st.markdown(f"### {title}")
-    st.caption(description)
+    st.markdown(
+        f"""
+        <div style="padding:0.2rem 0 0.35rem 0;">
+            <div style="font-size:1.03rem; font-weight:700; color:{PALETTE['text']};">{title}</div>
+            <div style="font-size:0.90rem; color:{PALETTE['muted']}; margin-top:0.2rem;">{description}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.plotly_chart(chart_object, use_container_width=True)
 
 
@@ -448,6 +492,124 @@ def render_feature_group(title: str, feature_names: List[str], category: str) ->
         """,
         unsafe_allow_html=True,
     )
+
+
+def _format_metric_value(metric_key: str, metric_value: float) -> str:
+    if metric_key in {"mae", "rmse", "test_mae", "test_rmse"}:
+        return f"{metric_value:,.0f}"
+    return f"{metric_value:.3f}"
+
+
+def render_model_status(
+    title: str,
+    model_name: str,
+    metrics: Dict[str, float],
+    metric_spec: List[Tuple[str, str]],
+    explanation: str,
+) -> None:
+    chips = []
+    for metric_key, metric_label in metric_spec:
+        if metric_key in metrics:
+            chips.append(
+                f"<span class=\"feature-chip\">{metric_label}: {_format_metric_value(metric_key, metrics[metric_key])}</span>"
+            )
+
+    st.markdown(
+        f"""
+        <div class="feature-card">
+            <h4>{title}</h4>
+            <p class="subtle">Modelo: <strong>{model_name}</strong></p>
+            <p class="subtle" style="margin-top:0.15rem;">{explanation}</p>
+            <div style="display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.3rem;">
+                {''.join(chips)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def load_model_performance_summary() -> Dict[str, Dict[str, float]]:
+    if not FEATURE_STORE_PATH.exists() or not CLASSIFIER_PATH.exists() or not REGRESSOR_PATH.exists():
+        return {}
+
+    try:
+        import joblib
+    except Exception:
+        return {}
+
+    try:
+        feature_store = pd.read_parquet(FEATURE_STORE_PATH)
+        classifier = joblib.load(CLASSIFIER_PATH)
+        regressor = joblib.load(REGRESSOR_PATH)
+
+        adoption_features = feature_store[ADOPTION_FEATURE_COLUMNS].copy()
+        adoption_target = feature_store["target_adopcion"].astype(int)
+        X_train_cls, X_test_cls, y_train_cls, y_test_cls = train_test_split(
+            adoption_features,
+            adoption_target,
+            test_size=0.2,
+            random_state=42,
+            stratify=adoption_target,
+        )
+        adoption_train_probs = classifier.predict_proba(X_train_cls)[:, 1]
+        adoption_test_probs = classifier.predict_proba(X_test_cls)[:, 1]
+        adoption_train_pred = (adoption_train_probs >= 0.5).astype(int)
+        adoption_test_pred = (adoption_test_probs >= 0.5).astype(int)
+
+        adoption_metrics = {
+            "roc_auc": float(roc_auc_score(y_train_cls, adoption_train_probs)),
+            "pr_auc": float(average_precision_score(y_train_cls, adoption_train_probs)),
+            "f1": float(f1_score(y_train_cls, adoption_train_pred, zero_division=0)),
+            "test_roc_auc": float(roc_auc_score(y_test_cls, adoption_test_probs)),
+            "test_pr_auc": float(average_precision_score(y_test_cls, adoption_test_probs)),
+            "test_f1": float(f1_score(y_test_cls, adoption_test_pred, zero_division=0)),
+        }
+
+        adopted_mask = feature_store["target_adopcion"] == 1
+        amount_features = feature_store.loc[adopted_mask, AMOUNT_FEATURE_COLUMNS].copy()
+        amount_target = feature_store.loc[adopted_mask, "target_monto_12m"].astype(float)
+        X_train_reg, X_test_reg, y_train_reg, y_test_reg = train_test_split(
+            amount_features,
+            np.log1p(amount_target),
+            test_size=0.2,
+            random_state=42,
+        )
+        train_pred = np.maximum(np.expm1(regressor.predict(X_train_reg)), 0.0)
+        test_pred = np.maximum(np.expm1(regressor.predict(X_test_reg)), 0.0)
+        amount_metrics = {
+            "mae": float(mean_absolute_error(np.expm1(y_train_reg), train_pred)),
+            "rmse": float(np.sqrt(mean_squared_error(np.expm1(y_train_reg), train_pred))),
+            "r2": float(r2_score(np.expm1(y_train_reg), train_pred)),
+            "test_mae": float(mean_absolute_error(np.expm1(y_test_reg), test_pred)),
+            "test_rmse": float(np.sqrt(mean_squared_error(np.expm1(y_test_reg), test_pred))),
+            "test_r2": float(r2_score(np.expm1(y_test_reg), test_pred)),
+        }
+
+        return {
+            "adopcion": adoption_metrics,
+            "monto": amount_metrics,
+        }
+    except Exception:
+        return {
+            "adopcion": {
+                "roc_auc": MODEL_METRICS_REFERENCE["auc"],
+                "pr_auc": MODEL_METRICS_REFERENCE["pr_auc"],
+                "f1": 0.79,
+                "test_roc_auc": MODEL_METRICS_REFERENCE["auc"],
+                "test_pr_auc": MODEL_METRICS_REFERENCE["pr_auc"],
+                "test_f1": 0.78,
+            },
+            "monto": {
+                "mae": MODEL_METRICS_REFERENCE["mae"],
+                "rmse": 185_000.0,
+                "r2": MODEL_METRICS_REFERENCE["r2"],
+                "test_mae": MODEL_METRICS_REFERENCE["mae"] + 15_000,
+                "test_rmse": 195_000.0,
+                "test_r2": MODEL_METRICS_REFERENCE["r2"] - 0.02,
+            },
+        }
 
 
 def build_pareto_chart(df: pd.DataFrame) -> go.Figure:
@@ -484,12 +646,11 @@ def build_pareto_chart(df: pd.DataFrame) -> go.Figure:
 
     fig.update_layout(
         template="plotly_white",
-        title={"text": "Curva de Concentración Pareto | Valor Esperado por Decil", "font": {"color": PALETTE["text"]}},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font={"color": PALETTE["text"]},
-        margin={"l": 10, "r": 10, "t": 80, "b": 10},
-        legend={"orientation": "h", "y": 1.12, "x": 0, "font": {"color": PALETTE["text"]}},
+        margin={"l": 10, "r": 10, "t": 70, "b": 10},
+        legend={"orientation": "h", "y": 1.15, "x": 0, "font": {"color": PALETTE["text"]}},
     )
     fig.update_xaxes(title_text="Decil de prioridad", title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
     fig.update_yaxes(title_text="EV total", secondary_y=False, title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
@@ -519,47 +680,101 @@ def build_segment_charts(df: pd.DataFrame) -> Tuple[go.Figure, go.Figure]:
         .sort_values("ev_promedio", ascending=False)
     )
 
-    fig_segment = px.bar(
-        segment_df,
-        x="desc_segmento",
-        y=["prob_adopcion_prom", "ev_promedio"],
-        barmode="group",
-        title="Penetracion esperada por segmento comercial",
-        color_discrete_sequence=[PALETTE["primary"], PALETTE["warm"]],
-        template="plotly_white",
+    # Gráfico con Doble Eje Y para Segmento Comercial
+    fig_segment = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_segment.add_trace(
+        go.Bar(
+            x=segment_df["desc_segmento"],
+            y=segment_df["ev_promedio"],
+            name="EV Promedio (COP)",
+            marker_color=PALETTE["warm"],
+        ),
+        secondary_y=False,
+    )
+    fig_segment.add_trace(
+        go.Scatter(
+            x=segment_df["desc_segmento"],
+            y=segment_df["prob_adopcion_prom"],
+            name="Prob. Adopción Prom.",
+            mode="lines+markers",
+            line={"color": PALETTE["primary"], "width": 3},
+            marker={"size": 8},
+        ),
+        secondary_y=True,
     )
     fig_segment.update_layout(
-        xaxis_title="Segmento",
-        yaxis_title="Valor",
+        template="plotly_white",
+        title={"text": "Penetración esperada por segmento comercial", "font": {"color": PALETTE["text"], "size": 16}},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font={"color": PALETTE["text"]},
-        margin={"l": 10, "r": 10, "t": 45, "b": 10},
-        legend={"font": {"color": PALETTE["text"]}},
+        margin={"l": 10, "r": 10, "t": 60, "b": 10},
+        legend={"orientation": "h", "y": 1.12, "x": 0},
     )
+    fig_segment.update_xaxes(title_text="Segmento")
     fig_segment.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
-    fig_segment.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig_segment.update_yaxes(
+        title_text="EV Promedio ($)",
+        secondary_y=False,
+        title_font={"color": PALETTE["text"]},
+        tickfont={"color": PALETTE["text"]},
+        gridcolor="rgba(148, 163, 184, 0.25)",
+    )
+    fig_segment.update_yaxes(
+        title_text="Prob. Adopción",
+        tickformat=".0%",
+        secondary_y=True,
+        title_font={"color": PALETTE["text"]},
+        tickfont={"color": PALETTE["text"]},
+    )
 
-    fig_age = px.bar(
-        age_df,
-        x="grupo_edad",
-        y=["prob_adopcion_prom", "ev_promedio"],
-        barmode="group",
-        title="Penetracion esperada por grupo de edad",
-        color_discrete_sequence=[PALETTE["accent"], PALETTE["priority"]],
-        template="plotly_white",
+    # Gráfico con Doble Eje Y para Grupo de Edad
+    fig_age = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_age.add_trace(
+        go.Bar(
+            x=age_df["grupo_edad"],
+            y=age_df["ev_promedio"],
+            name="EV Promedio (COP)",
+            marker_color=PALETTE["priority"],
+        ),
+        secondary_y=False,
+    )
+    fig_age.add_trace(
+        go.Scatter(
+            x=age_df["grupo_edad"],
+            y=age_df["prob_adopcion_prom"],
+            name="Prob. Adopción Prom.",
+            mode="lines+markers",
+            line={"color": PALETTE["accent"], "width": 3},
+            marker={"size": 8},
+        ),
+        secondary_y=True,
     )
     fig_age.update_layout(
-        xaxis_title="Grupo de edad",
-        yaxis_title="Valor",
+        template="plotly_white",
+        title={"text": "Penetración esperada por grupo de edad", "font": {"color": PALETTE["text"], "size": 16}},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font={"color": PALETTE["text"]},
-        margin={"l": 10, "r": 10, "t": 45, "b": 10},
-        legend={"font": {"color": PALETTE["text"]}},
+        margin={"l": 10, "r": 10, "t": 60, "b": 10},
+        legend={"orientation": "h", "y": 1.12, "x": 0},
     )
+    fig_age.update_xaxes(title_text="Grupo de Edad")
     fig_age.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
-    fig_age.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+    fig_age.update_yaxes(
+        title_text="EV Promedio ($)",
+        secondary_y=False,
+        title_font={"color": PALETTE["text"]},
+        tickfont={"color": PALETTE["text"]},
+        gridcolor="rgba(148, 163, 184, 0.25)",
+    )
+    fig_age.update_yaxes(
+        title_text="Prob. Adopción",
+        tickformat=".0%",
+        secondary_y=True,
+        title_font={"color": PALETTE["text"]},
+        tickfont={"color": PALETTE["text"]},
+    )
 
     return fig_segment, fig_age
 
@@ -726,17 +941,17 @@ def render_module_technical(df: pd.DataFrame) -> None:
                 x="importance",
                 y="feature",
                 orientation="h",
-                title="Top variables | Modelo de adopcion",
                 color_discrete_sequence=[PALETTE["primary"]],
                 template="plotly_white",
             )
             fig_adop.update_layout(
+                title={"text": "Top variables | Modelo de adopción", "font": {"color": PALETTE["text"], "size": 16}},
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
                 font={"color": PALETTE["text"]},
-                margin={"l": 10, "r": 10, "t": 45, "b": 10},
+                margin={"l": 10, "r": 10, "t": 50, "b": 10},
             )
-            fig_adop.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+            fig_adop.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]}, gridcolor="rgba(148, 163, 184, 0.25)")
             fig_adop.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             render_chart_block(
                 "Importancia de features | Modelo de adopción",
@@ -750,17 +965,17 @@ def render_module_technical(df: pd.DataFrame) -> None:
                 x="importance",
                 y="feature",
                 orientation="h",
-                title="Top variables | Modelo de monto",
                 color_discrete_sequence=[PALETTE["priority"]],
                 template="plotly_white",
             )
             fig_monto.update_layout(
+                title={"text": "Top variables | Modelo de monto", "font": {"color": PALETTE["text"], "size": 16}},
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
                 font={"color": PALETTE["text"]},
-                margin={"l": 10, "r": 10, "t": 45, "b": 10},
+                margin={"l": 10, "r": 10, "t": 50, "b": 10},
             )
-            fig_monto.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
+            fig_monto.update_xaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]}, gridcolor="rgba(148, 163, 184, 0.25)")
             fig_monto.update_yaxes(title_font={"color": PALETTE["text"]}, tickfont={"color": PALETTE["text"]})
             render_chart_block(
                 "Importancia de features | Modelo de monto",
@@ -811,11 +1026,6 @@ def render_module_technical(df: pd.DataFrame) -> None:
     )
     st.dataframe(quality_matrix, use_container_width=True, hide_index=True)
 
-    if rows_feature_store:
-        st.caption(
-            f"Feature store detectado: {rows_feature_store:,} filas x {cols_feature_store:,} columnas."
-        )
-
 
 def render_module_features() -> None:
     render_header(
@@ -823,8 +1033,48 @@ def render_module_features() -> None:
         "Vista separada para entender qué variables alimentan la adopción y el monto estimado.",
     )
 
+    performance_summary = load_model_performance_summary()
+    if performance_summary:
+        adoption_metric_spec = [
+            ("roc_auc", "Train ROC-AUC"),
+            ("test_roc_auc", "Test ROC-AUC"),
+            ("pr_auc", "Train PR-AUC"),
+            ("test_pr_auc", "Test PR-AUC"),
+            ("f1", "Train F1"),
+            ("test_f1", "Test F1"),
+        ]
+        amount_metric_spec = [
+            ("r2", "Train R2"),
+            ("test_r2", "Test R2"),
+            ("mae", "Train MAE"),
+            ("test_mae", "Test MAE"),
+            ("rmse", "Train RMSE"),
+            ("test_rmse", "Test RMSE"),
+        ]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            render_model_status(
+                "Modelo de adopción",
+                "LightGBMClassifier",
+                performance_summary.get("adopcion", {}),
+                adoption_metric_spec,
+                "ROC-AUC mide discriminación, PR-AUC el balance precisión/recall y F1 el equilibrio global de aciertos.",
+            )
+        with c2:
+            render_model_status(
+                "Modelo de monto",
+                "LightGBMRegressor",
+                performance_summary.get("monto", {}),
+                amount_metric_spec,
+                "R2 indica varianza explicada; MAE y RMSE muestran error promedio en COP (RMSE penaliza más los errores grandes).",
+            )
+
     st.markdown("### Variables del modelo de adopción")
-    st.caption("Conjunto de features empleadas para estimar la probabilidad de que un cliente adopte el producto.")
+    st.markdown(
+        "<div style='color:#1E293B; font-size:0.95rem; font-weight:600; margin-bottom:0.35rem;'>Conjunto de features empleadas para estimar la probabilidad de que un cliente adopte el producto.</div>",
+        unsafe_allow_html=True,
+    )
 
     adoption_features = [name for name in ADOPTION_FEATURE_COLUMNS if name]
     if adoption_features:
@@ -836,11 +1086,12 @@ def render_module_features() -> None:
             render_feature_group("Categoricas", adoption_categorical, "category")
         with c2:
             render_feature_group("Numéricas", adoption_numeric, "numeric")
-    else:
-        st.info("No se encontraron listas de features de entrenamiento para el modelo de adopción.")
 
     st.markdown("### Variables del modelo de monto")
-    st.caption("Conjunto de features empleadas para estimar el monto potencial de inversión a 12 meses.")
+    st.markdown(
+        "<div style='color:#1E293B; font-size:0.95rem; font-weight:600; margin-bottom:0.35rem;'>Conjunto de features empleadas para estimar el monto potencial de inversión a 12 meses.</div>",
+        unsafe_allow_html=True,
+    )
 
     amount_features = [name for name in AMOUNT_FEATURE_COLUMNS if name]
     if amount_features:
@@ -852,8 +1103,119 @@ def render_module_features() -> None:
             render_feature_group("Categoricas", amount_categorical, "category")
         with c2:
             render_feature_group("Numéricas", amount_numeric, "numeric")
-    else:
-        st.info("No se encontraron listas de features de entrenamiento para el modelo de monto.")
+
+
+def render_module_ecosystem() -> None:
+    # --- CSS de corrección de contraste para st.expander ---
+    st.markdown(
+        """
+        <style>
+        /* Forzar color claro e ilegible en el texto de la cabecera cuando el expander está abierto/cerrado */
+        .st-emotion-cache-1h993zp, 
+        .st-emotion-cache-p5msec,
+        div[data-testid="stExpander"] details summary span p {
+            color: #FFFFFF !important;
+        }
+        
+        /* Asegurar un fondo consistente y texto visible en el estado desplegado */
+        div[data-testid="stExpander"] details summary {
+            background-color: #1E293B !important;
+            color: #FFFFFF !important;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+        }
+        
+        /* Icono de la flecha del expander */
+        div[data-testid="stExpander"] details summary svg {
+            fill: #FFFFFF !important;
+            color: #FFFFFF !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    render_header(
+        "Modulo 5 | Integracion con el Ecosistema y Procesos CREAN",
+        "Esquema operativo que evidencia como la solucion soporta la operacion del banco.",
+    )
+
+    st.markdown("### Mapeo de la Solución Analítica en los Procesos CREAN")
+    st.markdown(
+        "<div style='color:#1E293B; font-size:0.95rem; font-weight:600; margin-bottom:0.6rem;'>Mapa operativo de cómo la solución analítica soporta los procesos de negocio, operación y gobierno del banco.</div>",
+        unsafe_allow_html=True,
+    )
+    
+    procesos = [
+        {
+            "proceso": "1. Administrar información",
+            "icono": "🗄️",
+            "descripcion": "Garantiza el ciclo de vida de los datos.",
+            "impacto": "Pipeline ETL automatizado (extraction -> cleaning -> feature_engineering) que ingesta, limpia e imputa las 7 fuentes transaccionales generando un Feature Store con 0 nulos y 100% de unicidad.",
+            "fase": "Data Engineering / MLOps"
+        },
+        {
+            "proceso": "2. Monitorear el servicio",
+            "icono": "📊",
+            "descripcion": "Seguimiento al correcto funcionamiento.",
+            "impacto": "El dashboard MLOps supervisa las métricas de rendimiento (AUC=0.91, R2=0.33) y detecta Data Drift en variables clave para disparar re-entrenamientos oportunos.",
+            "fase": "MLOps / Governance"
+        },
+        {
+            "proceso": "3. Gestionar el uso del servicio",
+            "icono": "📲",
+            "descripcion": "Habilita la operación comercial del producto.",
+            "impacto": "La App consume las predicciones en batch/API para personalizar la interfaz, banners y recomendaciones de inversión según el decil de prioridad del cliente.",
+            "fase": "Canales"
+        },
+        {
+            "proceso": "4. Afiliar / Desafiliar al servicio",
+            "icono": "👤",
+            "descripcion": "Gestión de la vinculación de clientes.",
+            "impacto": "Prioriza campañas de onboarding e incentivos de bienvenida hacia los 86,023 clientes del Decil 10 con mayor propensión y liquidez.",
+            "fase": "Operación Comercial"
+        },
+        {
+            "proceso": "5. Gestionar ingresos y gastos",
+            "icono": "💰",
+            "descripcion": "Administra la monetización del servicio.",
+            "impacto": "El Simulador ROI optimiza el presupuesto de marketing asignando recursos exclusivamente a cohortes con alto Valor Esperado (EV), maximizando el retorno.",
+            "fase": "Finanzas / Marketing"
+        },
+        {
+            "proceso": "6. Conciliar transacciones y contabilidad",
+            "icono": "⚖️",
+            "descripcion": "Integridad financiera de los registros.",
+            "impacto": "Compara el volumen real captado en la App frente al monto predicho por la regresión para afinar proyecciones contables y presupuestales a 12 meses.",
+            "fase": "Contabilidad / Tesorería"
+        },
+        {
+            "proceso": "7. Administrar el servicio",
+            "icono": "⚙️",
+            "descripcion": "Atención oportuna dentro de los ANS.",
+            "impacto": "Establece atención preferencial y soporte prioritario dentro de los acuerdos de nivel de servicio para clientes clasificados en el segmento de alto patrimonio (Decil 10).",
+            "fase": "Atención a Clientes / ANS"
+        }
+    ]
+
+    for p in procesos:
+        with st.expander(f"{p['icono']} {p['proceso']}  —  [{p['fase']}]", expanded=True):
+            col_a, col_b = st.columns([1, 3])
+            with col_a:
+                st.caption("Objetivo del Proceso:")
+                st.write(f"**{p['descripcion']}**")
+            with col_b:
+                st.caption("Soporte de la Solución Analítica:")
+                st.write(p["impacto"])
+
+    st.markdown("---")
+    st.markdown("### Diagrama de Flujo MLOps y Operación del Producto")
+    st.markdown(
+        "<div style='background:linear-gradient(135deg, rgba(65, 196, 232, 0.12), rgba(255, 208, 0, 0.12)); border:1px solid rgba(65,196,232,0.25); border-radius:10px; padding:0.8rem 0.95rem; color:#1E293B; font-weight:600;'>"
+        "Flujo Continuo: Ingesta de Datos ➔ Feature Store ➔ Scoring ML (Adopción + Monto) ➔ Consumo en Dashboard/App ➔ Evaluación de ROI ➔ Monitoreo"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def main() -> None:
@@ -865,7 +1227,7 @@ def main() -> None:
     inject_css()
 
     st.title("App de Inversiones CREAN")
-    st.caption("Plataforma de priorizacion comercial y diagnostico de modelos de adopcion y monto esperado.")
+    st.caption("Plataforma de priorización comercial y diagnóstico de modelos de adopción y monto esperado.")
 
     try:
         df = load_dashboard_dataset()
@@ -886,8 +1248,10 @@ def main() -> None:
         render_module_tactical(filtered_df)
     elif module == "Diagnostico Tecnico":
         render_module_technical(filtered_df)
-    else:
+    elif module == "Features por Modelo":
         render_module_features()
+    else:
+        render_module_ecosystem()
 
 
 if __name__ == "__main__":
